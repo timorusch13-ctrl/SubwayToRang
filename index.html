@@ -243,7 +243,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, deleteUser } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot, collection, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         const firebaseConfig = {
@@ -443,7 +443,7 @@
         };
 
         // Funktion um Bilder klein zu rechnen, damit sie als Text (Base64) in Firestore passen
-        function handleImageSelect(event, previewId, btnId) {
+        window.handleImageSelect = function(event, previewId, btnId) {
             const file = event.target.files[0];
             if(!file) return;
             
@@ -452,16 +452,32 @@
                 const img = new Image();
                 img.onload = function() {
                     const canvas = document.createElement('canvas');
-                    const MAX_WIDTH = 400; // Klein halten für Firestore
-                    const scaleSize = MAX_WIDTH / img.width;
-                    canvas.width = MAX_WIDTH;
-                    canvas.height = img.height * scaleSize;
+                    let MAX_WIDTH = 400;
+                    let MAX_HEIGHT = 800; // Limit für extrem lange Screenshots!
+                    let width = img.width;
+                    let height = img.height;
+
+                    // Beibehaltung des Seitenverhältnisses beim Verkleinern
+                    if (width > height) {
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                    } else {
+                        if (height > MAX_HEIGHT) {
+                            width *= MAX_HEIGHT / height;
+                            height = MAX_HEIGHT;
+                        }
+                    }
+
+                    canvas.width = width;
+                    canvas.height = height;
                     
                     const ctx = canvas.getContext('2d');
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    ctx.drawImage(img, 0, 0, width, height);
                     
-                    // Speichere den komprimierten String global
-                    tempBase64Image = canvas.toDataURL('image/jpeg', 0.5);
+                    // Bild als JPEG komprimieren (ignoriert PNG Transparenz sicher, macht Datei winzig)
+                    tempBase64Image = canvas.toDataURL('image/jpeg', 0.6);
                     
                     // Zeige Vorschau
                     const preview = document.getElementById(previewId);
@@ -478,7 +494,7 @@
                 img.src = e.target.result;
             }
             reader.readAsDataURL(file);
-        }
+        };
 
         window.triggerFileInput = (id) => {
             document.getElementById(id).click();
@@ -573,7 +589,7 @@
                         // Ich werde angegriffen. Zeige das Bild des Angreifers, damit ich es prüfen kann.
                         imageHTML = `<div class="mt-3 p-3 bg-m3-background rounded-xl">
                             <p class="text-[10px] text-m3-secondary uppercase mb-2">Beweis des Angreifers:</p>
-                            <img src="${c.challengerImage}" class="w-full h-24 object-cover rounded-lg border border-m3-outline/20 mb-3" onclick="window.open(this.src)">
+                            <img src="${c.challengerImage}" class="w-full h-24 object-cover rounded-lg border border-m3-outline/20 mb-3 cursor-pointer" onclick="openFullScreenImage(this.src)">
                             <div class="flex gap-2">
                                 <button onclick="reportPlayer('${c.id}', '${c.challengerId}')" class="flex-1 border border-m3-error text-m3-error py-2 rounded-full text-xs font-black active:scale-95 transition-transform">FAKE MELDEN</button>
                                 <button onclick="openRespondModal('${c.id}', ${c.challengerScore})" class="flex-1 bg-m3-primary text-m3-onPrimary py-2 rounded-full text-xs font-black shadow-lg active:scale-95 transition-transform">KONTERN</button>
@@ -592,7 +608,7 @@
                         imageHTML = `<div class="mt-3 p-3 bg-m3-background rounded-xl">
                             <p class="text-[10px] text-m3-secondary uppercase mb-1">Konter von ${c.targetName}:</p>
                             <p class="font-mono text-m3-primary font-bold mb-2">${c.targetScore.toLocaleString()} Pts</p>
-                            <img src="${c.targetImage}" class="w-full h-24 object-cover rounded-lg border border-m3-outline/20 mb-3">
+                            <img src="${c.targetImage}" class="w-full h-24 object-cover rounded-lg border border-m3-outline/20 mb-3 cursor-pointer" onclick="openFullScreenImage(this.src)">
                             <div class="flex gap-2">
                                 <button onclick="reportPlayer('${c.id}', '${c.targetId}')" class="flex-1 border border-m3-error text-m3-error py-2 rounded-full text-xs font-black active:scale-95 transition-transform">FAKE MELDEN</button>
                                 <button onclick="acceptResponse('${c.id}', ${c.challengerScore}, ${c.targetScore})" class="flex-1 bg-green-500 text-white py-2 rounded-full text-xs font-black shadow-lg active:scale-95 transition-transform">AKZEPTIEREN</button>
@@ -607,7 +623,7 @@
                     const iWon = (c.winnerId === currentUser.uid);
                     statusBadge = '<span class="text-[10px] bg-m3-outline/20 text-m3-secondary px-2 py-1 rounded font-bold">BEENDET</span>';
                     actionHTML = `<div class="text-center text-sm font-bold mt-2 py-2 rounded-xl ${iWon ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}">
-                        ${iWon ? 'SIEG (+50 Coins)' : 'NIEDERLAGE'}
+                        ${iWon ? 'SIEG (+100 Coins)' : 'NIEDERLAGE'}
                     </div>`;
                 }
                 // --- STATE: REPORTED (Wurde wegen Fake gemeldet) ---
@@ -678,15 +694,15 @@
                 winnerId: winnerId
             });
 
-            // Gewinner 50 Coins geben
+            // Gewinner 100 Coins geben
             const winnerRef = doc(db, 'players', winnerId);
             const winnerSnap = await getDoc(winnerRef);
             if(winnerSnap.exists()) {
-                await updateDoc(winnerRef, { coins: (winnerSnap.data().coins || 0) + 50 });
+                await updateDoc(winnerRef, { coins: (winnerSnap.data().coins || 0) + 100 });
             }
 
             if(winnerId === currentUser.uid) {
-                showMessage("Du hast gewonnen! +50 Coins 🏆");
+                showMessage("Du hast gewonnen! +100 Coins 🏆");
             } else {
                 showMessage("Der Gegner hat ehrlich gewonnen. Battle beendet.");
             }
